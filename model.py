@@ -13,11 +13,13 @@ def get_optimizer(model, lr, betas, eps, weight_decay):
         weight_decay=weight_decay
     )
 
-def get_scheduler(optimizer, warmup_updates):
-    return torch.optim.lr_scheduler.LambdaLR(
-        optimizer,
-        lr_lambda=lambda u: 1 - u / warmup_updates
-    )
+def get_scheduler(optimizer, warmup_updates, max_updates):
+    def lr_lambda(current_update):
+        if current_update < warmup_updates:
+            return current_update / warmup_updates
+        else:
+            return max(0.0, 1 - (current_update - warmup_updates) / (max_updates - warmup_updates))
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
 class GeoWhisper(nn.Module):
     
@@ -26,23 +28,35 @@ class GeoWhisper(nn.Module):
         d_model,
         nhead,
         num_layers,
-        max_length
+        max_length,
+        audio_length,
+        num_mel_bins,
+        tokenizer
     ):
         super(GeoWhisper, self).__init__()
-        self.conv1 = nn.Conv1d(1, 1, 3, 1, 2)
-        self.conv2 = nn.Conv1d(1, 1, 3, 2, 2)
-        self.transformer_encoder = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead),
-            num_layers=num_layers
+        
+        # convs and projection
+        self.conv1 = nn.Conv1d(num_mel_bins, d_model, 3, 1, 2)
+        self.conv2 = nn.Conv1d(d_model, d_model, 3, 2, 2)
+        
+        # transformer        
+        self.transformer = nn.Transformer(
+            d_model=d_model,
+            nhead=nhead,
+            num_encoder_layers=num_layers,
+            num_decoder_layers=num_layers,
+            dim_feedforward=d_model * 4,
+            batch_first=True
         )
-        self.transformer_decoder = nn.TransformerDecoder(
-            nn.TransformerDecoderLayer(d_model=d_model, nhead=nhead),
-            num_layers=num_layers
-        )
+        
+        # text embedding and output projection, shared weights
+        self.input_embedding = nn.Embedding(tokenizer.vocab_size, d_model)
+        self.output_projection = nn.Linear(d_model, tokenizer.vocab_size)
+        self.input_embedding.weight = self.output_projection.weight
         
         self.register_buffer(
             'sinusoidal_positional_encoding',
-            self._generate_sinusoidal_positional_encoding(max_length, d_model)
+            self._generate_sinusoidal_positional_encoding(int(audio_length / 2) + 2, d_model).T.unsqueeze(0)
         )
         
         self.learned_positional_encoding = nn.Embedding(max_length, d_model)
@@ -54,6 +68,10 @@ class GeoWhisper(nn.Module):
         nn.init.constant_(self.conv1.bias, 0.0)
         nn.init.constant_(self.conv2.bias, 0.0)
         
+        self.tokenizer = tokenizer
+        self.tokenizer.pad_token = tokenizer.eos_token
+        self.max_length = max_length
+        
     def _generate_sinusoidal_positional_encoding(self, max_length, d_model):
         encoding = torch.zeros(max_length, d_model)
         position = torch.arange(0, max_length).unsqueeze(1).float()
@@ -63,35 +81,80 @@ class GeoWhisper(nn.Module):
         return encoding
 
     def forward(self, src, tgt):
-        print('input and target', src.shape, tgt.shape)
+        
+        # batch, channels, seq_len
+        src = src.permute(0, 2, 1)
+        # print('input', src.shape) # batch, num_mel_bins, audio frames
+        # print('target', tgt['input_ids'].shape) # batch, text length
         
         # convs
         src = F.gelu(self.conv1(src))
-        print('1st conv', src.shape)
+        # print('1st conv', src.shape) # batch, d_model/4, audio length + 2
         src = F.gelu(self.conv2(src))
-        print('2nd conv', src.shape)
+        # print('2nd conv', src.shape) # batch, d_model, (audio length / 2) + 2
         
-        # reshape for transformer
-        src = src.permute(2, 0, 1)
-        seq_len, batch_size, _ = src.shape
-        src += self.sinusoidal_positional_encoding[:seq_len, :].unsqueeze(1).expand(-1, batch_size, -1)
-        print('src plus SPE', src.shape)
+        # add sinusoidal positional encoding
+        src_embedded = src + self.sinusoidal_positional_encoding
+        src_embedded = src_embedded.permute(0, 2, 1)
+        # print('src plus SPE', src_embedded.shape) # batch, max_length, d_model
         
-        # transformer encoder
-        memory = self.transformer_encoder(src)
-        print('enc out', memory.shape)
+        text = tgt['input_ids']
+        attn_mask = tgt['attention_mask']
         
         # learned positional encoding
-        tgt_seq_len, tgt_batch_size, _ = tgt.shape
-        assert tgt_batch_size == batch_size, "Source and target batch sizes must match"
-        tgt_pos = torch.arange(tgt_seq_len, device=tgt.device).unsqueeze(0).expand(batch_size, -1)
-        tgt = tgt + self.learned_positional_encoding(tgt_pos).permute(1, 0, 2)
-        print('tgt plus LPE', tgt.shape)
+        tgt_embedded = self.input_embedding(text)
+        tgt_embedded = self.input_embedding(
+            text
+        ) + self.learned_positional_encoding(
+            torch.arange(text.shape[1]).to(text.device)
+        )
+        # print('tgt plus LPE', tgt_embedded.shape) # batch, max_length, d_model
         
-        # transformer decoder
-        output = self.transformer_decoder(tgt, memory)
-        print('dec out', output.shape)
+        # target key padding mask
+        tgt_key_padding_mask = (attn_mask == 0)
+        # print('tgt key padding mask', tgt_key_padding_mask.shape) # batch, max_length
+        
+        # causal mask
+        causal_mask = torch.triu(
+            torch.ones(text.shape[1], text.shape[1]),
+            diagonal=1
+        ).bool().to(text.device)
+        
+        # transformer
+        trf_out = self.transformer(
+            src_embedded,
+            tgt_embedded,
+            src_mask=None,
+            tgt_mask=causal_mask,
+            memory_mask=None,
+            src_key_padding_mask=None,
+            tgt_key_padding_mask=tgt_key_padding_mask,
+            memory_key_padding_mask=None
+        )
+        # print('transformer', trf_out.shape) # batch, max_length, d_model
+        
+        # output projection
+        output = self.output_projection(trf_out)
+        # print('output', output.shape) # batch, max_length, vocab_size
+        
         return output
     
-    def preprocess(audio_file):
-        pass
+    def get_targets(self, supervisions):
+        """TODO"""
+        # sequence_idx = supervisions['sequence_idx']
+        # start_frame = supervisions['start_frame']
+        # num_frames = supervisions['num_frames']
+        
+        return self.tokenizer(
+            supervisions['text'],
+            return_tensors='pt',
+            padding='longest',
+            max_length=self.max_length,
+            truncation=True
+        )
+
+if __name__ == "__main__":
+    model = GeoWhisper(512, 8, 6, 1024, 2048)
+    src = torch.randn(10, 1, 80)
+    tgt = torch.randn(10, 1, 80)
+    model(src, tgt)
