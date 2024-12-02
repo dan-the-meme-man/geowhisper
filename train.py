@@ -3,7 +3,7 @@ from time import time
 import torch
 from torch.nn import CrossEntropyLoss
 from torch.nn.utils import clip_grad_norm_
-from transformers import GPT2Tokenizer
+from transformers import AutoTokenizer
 
 from model import get_optimizer, get_scheduler, GeoWhisper
 from dataloader import get_dataloader
@@ -92,7 +92,7 @@ def main():
         max_length,
         audio_length,
         num_mel_bins,
-        GPT2Tokenizer.from_pretrained('gpt2')
+        AutoTokenizer.from_pretrained('FacebookAI/xlm-roberta-base')
     )
     
     optimizer = get_optimizer(

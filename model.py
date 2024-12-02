@@ -36,8 +36,8 @@ class GeoWhisper(nn.Module):
         super(GeoWhisper, self).__init__()
         
         # convs and projection
-        self.conv1 = nn.Conv1d(num_mel_bins, d_model, 3, 1, 2)
-        self.conv2 = nn.Conv1d(d_model, d_model, 3, 2, 2)
+        self.conv1 = nn.Conv1d(num_mel_bins, d_model, 3, 1, 1)
+        self.conv2 = nn.Conv1d(d_model, d_model, 3, 2, 1)
         
         # transformer        
         self.transformer = nn.Transformer(
@@ -56,7 +56,7 @@ class GeoWhisper(nn.Module):
         
         self.register_buffer(
             'sinusoidal_positional_encoding',
-            self._generate_sinusoidal_positional_encoding(int(audio_length / 2) + 2, d_model).T.unsqueeze(0)
+            self._generate_sinusoidal_positional_encoding(int(audio_length / 2), d_model).T.unsqueeze(0)
         )
         
         self.learned_positional_encoding = nn.Embedding(max_length, d_model)
@@ -152,6 +152,45 @@ class GeoWhisper(nn.Module):
             max_length=self.max_length,
             truncation=True
         )
+        
+    def save(self):
+        torch.save(self.state_dict(), 'models/plain.pt')
+        
+    def greedy_decode(self, src, device='cuda'):
+
+        self.eval()
+
+        tgt_input_ids = torch.tensor([[self.tokenizer.bos_token_id]]).to(device)
+
+        for _ in range(model.max_length):
+            tgt = {
+                'input_ids': tgt_input_ids.to(device),
+                'attention_mask': torch.ones_like(tgt_input_ids).to(device)
+            }
+
+            # forward pass
+            with torch.no_grad():
+                logits = model(src, tgt)
+
+            next_token_id = torch.argmax(logits[:, -1, :], dim=-1)
+            tgt_input_ids = torch.cat(
+                [tgt_input_ids, next_token_id.unsqueeze(1)],
+                dim=1
+            )
+
+            if next_token_id.item() == model.end_id:
+                break
+
+        output_text = model.tokenizer.decode(
+            tgt_input_ids[0].tolist(),
+            skip_special_tokens=True
+        )
+
+        return output_text
+    
+    def teacher_forced_decode(self, src, tgt):
+        output = self(src, tgt)
+        return self.tokenizer.batch_decode(output.argmax(dim=-1))
 
 if __name__ == "__main__":
     model = GeoWhisper(512, 8, 6, 1024, 2048)
