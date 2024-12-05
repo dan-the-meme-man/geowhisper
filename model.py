@@ -162,7 +162,7 @@ class GeoWhisper(nn.Module):
 
         tgt_input_ids = torch.tensor([[self.tokenizer.bos_token_id]]).to(device)
 
-        for _ in range(model.max_length):
+        for _ in range(self.max_length):
             tgt = {
                 'input_ids': tgt_input_ids.to(device),
                 'attention_mask': torch.ones_like(tgt_input_ids).to(device)
@@ -170,7 +170,7 @@ class GeoWhisper(nn.Module):
 
             # forward pass
             with torch.no_grad():
-                logits = model(src, tgt)
+                logits = self(src, tgt)
 
             next_token_id = torch.argmax(logits[:, -1, :], dim=-1)
             tgt_input_ids = torch.cat(
@@ -178,10 +178,12 @@ class GeoWhisper(nn.Module):
                 dim=1
             )
 
-            if next_token_id.item() == model.end_id:
+            if next_token_id.item() == self.tokenizer.eos_token_id:
                 break
-
-        output_text = model.tokenizer.decode(
+        
+        print(logits[0, :16, :5])
+        
+        output_text = self.tokenizer.decode(
             tgt_input_ids[0].tolist(),
             skip_special_tokens=True
         )

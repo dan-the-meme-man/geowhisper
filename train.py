@@ -15,12 +15,10 @@ def train(
     scheduler,
     max_updates,
     max_grad_norm,
+    device,
     log_interval=100
 ):
-    
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f'Using device: {device}')
-    model.to(device)
+
     model.train()
     
     ignore_index = model.tokenizer.pad_token_id
@@ -70,7 +68,7 @@ def main():
     max_duration = 30 # probably way too big, just see what fits
     num_buckets = 50
     num_mel_bins = 80
-    max_updates = 1_048_576
+    max_updates = 100#1_048_576
     audio_length = max_duration * 100 # 10ms frames
     
     lr = 1e-3
@@ -85,6 +83,9 @@ def main():
     num_layers = 6
     max_length = 1024
     
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f'Using device: {device}')
+    
     model = GeoWhisper(
         d_model,
         nhead,
@@ -94,6 +95,7 @@ def main():
         num_mel_bins,
         AutoTokenizer.from_pretrained('FacebookAI/xlm-roberta-base')
     )
+    model.to(device)
     
     optimizer = get_optimizer(
         model,
@@ -108,14 +110,30 @@ def main():
         max_updates
     )
     
-    train(
-        model,
-        get_dataloader(max_duration, num_buckets, num_mel_bins, overfit),
-        optimizer,
-        scheduler,
-        max_updates,
-        max_grad_norm
-    )
+    train_loader = get_dataloader(max_duration, num_buckets, num_mel_bins, overfit)
+    
+    # train(
+    #     model,
+    #     train_loader,
+    #     optimizer,
+    #     scheduler,
+    #     max_updates,
+    #     max_grad_norm,
+    #     device,
+    #     log_interval=100
+    # )
+    
+    for i, batch in enumerate(train_loader):
+            
+        src = batch['inputs'][0].unsqueeze(0).to(device)
+        tgt = batch['supervisions']['text'][0]
+        
+        print('\n\n\n')
+        print(model.greedy_decode(src))
+        print(tgt)
+        
+        if i == 1:
+            break
     
 if __name__ == '__main__':
     main()
