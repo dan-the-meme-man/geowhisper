@@ -1,3 +1,4 @@
+import os
 from time import time
 
 import torch
@@ -7,16 +8,25 @@ from transformers import AutoTokenizer
 
 from model import get_optimizer, get_scheduler, GeoWhisper
 from dataloader import get_dataloader
+from evaluate import evaluate
+
+CKPTS_DIR = '/exp/ddegenaro/geowhisper_ckpts'
 
 def train(
-    model,
-    train_loader,
-    optimizer,
-    scheduler,
-    max_updates,
-    max_grad_norm,
-    device,
-    log_interval=100
+    model: GeoWhisper,
+    train_loader: torch.utils.data.DataLoader,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LambdaLR,
+    max_updates: int,
+    max_grad_norm: float,
+    device: torch.device,
+    langs: list,
+    max_duration: float,
+    num_buckets: int,
+    num_mel_bins: int,
+    overfit: bool,
+    log_interval: int = 100,
+    ckpt_interval: int = 10_000
 ):
 
     model.train()
@@ -56,19 +66,44 @@ def train(
                 msg = f'Iteration {updates_count:06}/{max_updates}'
                 msg += f' - Avg. Loss: {total_loss/updates_count:.4f}'
                 msg += f' - Avg. Time: {total_time/updates_count:.4f}'
-                print(msg)
+                print(msg, flush=True)
+                
+            if updates_count % ckpt_interval == 0:
+                print('Saving model...')
+                save_path = os.path.join(CKPTS_DIR, f'model_{updates_count}.pt')
+                torch.save(
+                    model.state_dict(),
+                    save_path
+                )
+                print(f'Saved to {save_path}')
+                print('Evaluating model...')
+                evaluate(
+                    model,
+                    'dev',
+                    langs,
+                    max_duration,
+                    num_buckets,
+                    num_mel_bins,
+                    overfit,
+                    device,
+                    log_interval
+                )
 
             if updates_count == max_updates:
                 break
             
 def main():
     
+    langs = [
+        'ar_eg', 'en_us', 'es_419', 'fr_fr', 'pt_br', 'ru_ru'
+    ]
+    
     overfit = True
     
     max_duration = 30 # probably way too big, just see what fits
     num_buckets = 50
     num_mel_bins = 80
-    max_updates = 100#1_048_576
+    max_updates = 1_000 if overfit else 1_048_576
     audio_length = max_duration * 100 # 10ms frames
     
     lr = 1e-3
@@ -84,7 +119,7 @@ def main():
     max_length = 1024
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f'Using device: {device}')
+    print(f'Using device: {device}', flush=True)
     
     model = GeoWhisper(
         d_model,
@@ -112,25 +147,44 @@ def main():
     
     train_loader = get_dataloader(max_duration, num_buckets, num_mel_bins, overfit)
     
-    # train(
-    #     model,
-    #     train_loader,
-    #     optimizer,
-    #     scheduler,
-    #     max_updates,
-    #     max_grad_norm,
-    #     device,
-    #     log_interval=100
-    # )
+    train(
+        model,
+        train_loader,
+        optimizer,
+        scheduler,
+        max_updates,
+        max_grad_norm,
+        device,
+        langs,
+        max_duration,
+        num_buckets,
+        num_mel_bins,
+        overfit,
+        log_interval = 1 if overfit else 100,
+        ckpt_interval = 100 if overfit else 50_000
+    )
+    
+    print('Saving final model...', flush=True)
+    torch.save(model.state_dict(), 'models/model_final.pt')
+    print('Done!', flush=True)
+    print('Evaluation...', flush=True)
+    evaluate(
+        model,
+        'dev',
+        langs,
+        train_loader,
+        max_updates,
+        device
+    )
     
     for i, batch in enumerate(train_loader):
             
         src = batch['inputs'][0].unsqueeze(0).to(device)
         tgt = batch['supervisions']['text'][0]
         
-        print('\n\n\n')
-        print(model.greedy_decode(src))
-        print(tgt)
+        print('\n\n\n', flush=True)
+        print('decoded:', model.greedy_decode(src), flush=True)
+        print('target:', tgt, flush=True)
         
         if i == 1:
             break

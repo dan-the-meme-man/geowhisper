@@ -12,43 +12,88 @@ Run zipformer/train.py:
 icefall/blob/geolocation/egs/librispeech/ASR/zipformer/train.py
 """
 
+import os
+
 from torch.utils.data import DataLoader
 
-from lhotse import Fbank, FbankConfig, load_manifest_lazy
+from lhotse import Fbank, FbankConfig, load_manifest_lazy, CutSet
+from lhotse.manipulation import combine
 from lhotse.dataset import DynamicBucketingSampler, K2SpeechRecognitionDataset, OnTheFlyFeatures
 
-def get_dataloader(max_duration, num_buckets, num_mel_bins, overfit=False):
+FLEURS_PATH = '/exp/ddegenaro/fleurs'
+
+def get_dataloader(
+    max_duration: float,
+    num_buckets: int,
+    num_mel_bins: int,
+    overfit: bool = False,
+    split: str = 'train',
+    lang: str = 'all'
+):
     
-    train_dataset = K2SpeechRecognitionDataset(
+    dataset = K2SpeechRecognitionDataset(
         input_strategy=OnTheFlyFeatures(
             Fbank(FbankConfig(num_mel_bins=num_mel_bins))
         ),
         cut_transforms=[],
         input_transforms=[],
-        return_cuts=False
+        return_cuts=True
     )
-
-    if overfit:
-        manifest = load_manifest_lazy(TEST_PATH).subset(first=100)
+    if lang == 'all':
+        langs = ['ar_eg', 'en_us', 'es_419', 'fr_fr', 'pt_br', 'ru_ru']
     else:
-        manifest = load_manifest_lazy(TEST_PATH)
+        langs = [lang]
+    fnames = [
+        f'fleurs-{lang}_recordings_{split}.jsonl.gz'
+        for lang in langs
+    ]
+    paths = [
+        os.path.join(FLEURS_PATH, langs[i], fnames[i])
+        for i in range(len(langs))
+    ]
+    recordings = [
+        load_manifest_lazy(path)
+        for path in paths
+    ]
+    recordings = combine(recordings)
+    supervisions = [
+        load_manifest_lazy(path.replace('recordings', 'supervisions'))
+        for path in paths
+    ]
+    supervisions = combine(supervisions)
+    assert len(recordings) == len(supervisions)
+        
+    manifest = CutSet.from_manifests(recordings, supervisions)
     
-    train_sampler = DynamicBucketingSampler(
-        manifest.filter(lambda c: c.duration <= 30).pad(duration=max_duration),
-        max_duration=max_duration, # per GPU, in seconds
-        shuffle=True,
-        num_buckets=num_buckets, # make small if small data - can cause errors
-        # buffer_size=self.args.num_buckets * 2000,
-        # shuffle_buffer_size=self.args.num_buckets * 5000,
-        # drop_last=self.args.drop_last,
-    )
-
-    return DataLoader(
-        train_dataset,
-        sampler=train_sampler,
-        batch_size=None,
-        num_workers=0 # 4
-    )
+    if overfit:
+        manifest = manifest.subset(first=100)
+    
+    if split == 'train':
+        train_sampler = DynamicBucketingSampler(
+            manifest.filter(lambda c: c.duration <= 30).pad(duration=max_duration),
+            max_duration=max_duration, # per GPU, in seconds
+            shuffle=True,
+            num_buckets=num_buckets, # make small if small data - can cause errors
+            # buffer_size=self.args.num_buckets * 2000,
+            # shuffle_buffer_size=self.args.num_buckets * 5000,
+            # drop_last=self.args.drop_last,
+        )
+    else:
+        pass
+        
+    if split == 'train':
+        return DataLoader(
+            dataset,
+            sampler=train_sampler,
+            batch_size=None,
+            num_workers=0 # 4
+        )
+    else:
+        return DataLoader(
+            dataset,
+            batch_size=None,
+            num_workers=0 # 4
+        )
     
 if __name__ == "__main__":
     dl = get_dataloader(10, 100, 80)

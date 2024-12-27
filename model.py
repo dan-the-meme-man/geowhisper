@@ -181,7 +181,7 @@ class GeoWhisper(nn.Module):
             if next_token_id.item() == self.tokenizer.eos_token_id:
                 break
         
-        print(logits[0, :16, :5])
+        #print(logits[0, :16, :5])
         
         output_text = self.tokenizer.decode(
             tgt_input_ids[0].tolist(),
