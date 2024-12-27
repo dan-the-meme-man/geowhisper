@@ -21,6 +21,8 @@ cmn_range = (0x4E00, 0x9FFF)
 # https://troylee2008.blogspot.com/2010/03/using-sclite.html
 # https://sources.debian.org/data/main/s/sctk/2.4.10-20151007-1312Z%2Bdfsg2-3.1~deb10u1/doc/infmts.htm#trn_fmt_name_0
 
+SCLITE_PATH = '/home/hltcoe/ddegenaro/SCTK/bin/sclite'
+
 def cer(split: str = 'dev', lang: str = 'en_us'):
     """Calculate Character Error Rate (CER)"""
     
@@ -28,7 +30,7 @@ def cer(split: str = 'dev', lang: str = 'en_us'):
     os.makedirs(write_dir, exist_ok=True)
     
     subprocess.run([
-        '/home/hltcoe/ddegenaro/SCTK/bin/sclite',
+        SCLITE_PATH,
         '-r', 'ref.trn',
         'trn',
         '-h', 'hyp.trn',

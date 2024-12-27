@@ -5,3 +5,5 @@ errors/
 outputs/
 model.txt
 models/
+results/
+hyps_refs/
