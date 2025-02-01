@@ -31,6 +31,8 @@ def get_dataloader(
     lang: str = 'all'
 ):
     
+    assert split in ['train', 'dev', 'test']
+    
     dataset = K2SpeechRecognitionDataset(
         input_strategy=OnTheFlyFeatures(
             Fbank(FbankConfig(num_mel_bins=num_mel_bins))
@@ -68,35 +70,32 @@ def get_dataloader(
     if overfit:
         manifest = manifest.subset(first=100)
     
-    if split == 'train':
-        train_sampler = DynamicBucketingSampler(
-            manifest.filter(lambda c: c.duration <= 30).pad(duration=max_duration),
-            max_duration=max_duration, # per GPU, in seconds
-            shuffle=True,
-            num_buckets=num_buckets, # make small if small data - can cause errors
-            # buffer_size=self.args.num_buckets * 2000,
-            # shuffle_buffer_size=self.args.num_buckets * 5000,
-            # drop_last=self.args.drop_last,
-        )
-    else:
-        pass
-        
-    if split == 'train':
-        return DataLoader(
-            dataset,
-            sampler=train_sampler,
-            batch_size=None,
-            num_workers=0 # 4
-        )
-    else:
-        return DataLoader(
-            dataset,
-            batch_size=None,
-            num_workers=0 # 4
-        )
+    sampler = DynamicBucketingSampler(
+        manifest.filter(lambda c: c.duration <= 30).pad(duration=max_duration),
+        max_duration=max_duration, # per GPU, in seconds
+        shuffle=True,
+        num_buckets=num_buckets, # make small if small data - can cause errors
+        # buffer_size=self.args.num_buckets * 2000,
+        # shuffle_buffer_size=self.args.num_buckets * 5000,
+        # drop_last=self.args.drop_last,
+    )
+
+    return DataLoader(
+        dataset,
+        sampler=sampler,
+        batch_size=None,
+        num_workers=0 # 4
+    )
     
 if __name__ == "__main__":
-    dl = get_dataloader(10, 100, 80)
+    dl = get_dataloader(
+        30,
+        50,
+        80,
+        True,
+        'dev',
+        'all'
+    )
     for batch in dl:
         #print(batch)
         print(batch['inputs'].shape)

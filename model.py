@@ -152,11 +152,8 @@ class GeoWhisper(nn.Module):
             max_length=self.max_length,
             truncation=True
         )
-        
-    def save(self):
-        torch.save(self.state_dict(), 'models/plain.pt')
-        
-    def greedy_decode(self, src, device='cuda'):
+    
+    def greedy_decode(self, src, device):
 
         self.eval()
 
@@ -171,6 +168,7 @@ class GeoWhisper(nn.Module):
             # forward pass
             with torch.no_grad():
                 logits = self(src, tgt)
+                # print(logits.shape)
 
             next_token_id = torch.argmax(logits[:, -1, :], dim=-1)
             tgt_input_ids = torch.cat(
@@ -189,6 +187,14 @@ class GeoWhisper(nn.Module):
         )
 
         return output_text
+    
+    def batched_greedy_decode(self, src, device, max_length):
+        batch_size = src.shape[0]
+        tgt = torch.fill(self.tokenizer.bos_token_id, (batch_size, 1)).to(device)
+        for _ in range(max_length):
+            output = self(src, {'input_ids': tgt})
+            tgt = torch.cat((tgt, output.argmax(dim=-1)[:, -1].unsqueeze(1)), dim=1)
+        return tgt[:, 1:]
     
     def teacher_forced_decode(self, src, tgt):
         output = self(src, tgt)

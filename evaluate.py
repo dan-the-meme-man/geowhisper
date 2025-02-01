@@ -23,7 +23,7 @@ cmn_range = (0x4E00, 0x9FFF)
 
 SCLITE_PATH = '/home/hltcoe/ddegenaro/SCTK/bin/sclite'
 
-def cer(split: str = 'dev', lang: str = 'en_us'):
+def cer(split: str = 'dev', lang: str = 'en_us', train_steps = ''):
     """Calculate Character Error Rate (CER)"""
     
     write_dir = f'results/{lang}_{split}'
@@ -33,7 +33,7 @@ def cer(split: str = 'dev', lang: str = 'en_us'):
         SCLITE_PATH,
         '-r', 'ref.trn',
         'trn',
-        '-h', 'hyp.trn',
+        '-h', f'hyp_{train_steps}.trn',
         'trn',
         '-i', 'rm',
         '-o', 'all'
@@ -48,9 +48,9 @@ def evaluate(
     max_duration: int,
     num_buckets: int,
     num_mel_bins: int,
-    overfit: bool,
     device: torch.device,
-    log_interval: int = 100
+    log_interval: int = 100,
+    train_steps: str = ''
 ):
 
     model.eval()
@@ -63,27 +63,27 @@ def evaluate(
             max_duration,
             num_buckets,
             num_mel_bins,
-            overfit,
+            overfit=False,
             split=split,
             lang=lang
         )
     
-        ref_path = f'results/{lang}_{split}/ref.trn'
-        if not os.path.exists(ref_path):
-            print(f'Creating reference file for {lang} {split}...', flush=True)
-            os.makedirs(f'results/{lang}_{split}', exist_ok=True)
-            with open(
-                f'results/{lang}_{split}/ref.trn', 'w+', encoding='utf-8'
-            ) as ref_file:
-                for i, batch in enumerate(loader):
-                    tgt = batch['supervisions']
-                    id_str = batch['supervisions']['cut'][0].supervisions[0].id
-                    ref_file.write(tgt['text'][0].strip() + f' ({id_str})\n')
-        else:
-            print(f'Reference file {ref_path} already exists. Skipping...', flush=True)
+        # ref_path = f'results/{lang}_{split}/ref.trn'
+        # if not os.path.exists(ref_path):
+        #     print(f'Creating reference file for {lang} {split}...', flush=True)
+        #     os.makedirs(f'results/{lang}_{split}', exist_ok=True)
+        #     with open(
+        #         f'results/{lang}_{split}/ref.trn', 'w+', encoding='utf-8'
+        #     ) as ref_file:
+        #         for i, batch in enumerate(loader):
+        #             tgt = batch['supervisions']
+        #             id_str = batch['supervisions']['cut'][0].supervisions[0].id
+        #             ref_file.write(tgt['text'][0].strip() + f' ({id_str})\n')
+        # else:
+        #     print(f'Reference file {ref_path} already exists. Skipping...', flush=True)
         
         print(f'Creating hypothesis file for {lang} {split}...', flush=True)
-        hyp_path = f'results/{lang}_{split}/hyp.trn'
+        hyp_path = f'results/{lang}_{split}/hyp_{train_steps}.trn'
         with open(
             hyp_path, 'w+', encoding='utf-8'
         ) as hyp_file:
@@ -91,17 +91,17 @@ def evaluate(
                 for i, batch in enumerate(loader):
                     
                     src = batch['inputs'].to(device)
-                    output = model.greedy_decode(src)
+                    output = model.greedy_decode(src, device)
                     id_str = batch['supervisions']['cut'][0].supervisions[0].id
                     hyp_file.write(output.strip() + f' ({id_str})\n')
                     
                     if (i+1) % log_interval == 0:
                         total_time = time() - start
-                        msg = f'Iteration {i:06}/{len(loader)}'
+                        msg = f'Iteration {i:06}'
                         msg += f' - Avg. Time: {total_time/(i+1):.4f}'
                         print(msg, flush=True)
         print(f'Wrote hypothesis file to {hyp_path}', flush=True)
-        cer(f'results/{split}_{lang}_hyp.trn', f'results/{split}_{lang}_ref.trn', split, lang)
+        cer(split, lang, train_steps=train_steps)
                 
 def main(split: str, lang: str, updates_count: int):
     
