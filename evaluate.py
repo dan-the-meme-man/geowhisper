@@ -102,6 +102,8 @@ def evaluate(
                         print(msg, flush=True)
         print(f'Wrote hypothesis file to {hyp_path}', flush=True)
         cer(split, lang, train_steps=train_steps)
+        
+    model.train()
                 
 def main(split: str, lang: str, updates_count: int):
     

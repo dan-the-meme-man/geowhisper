@@ -12,6 +12,18 @@ from evaluate import evaluate
 
 CKPTS_DIR = '/exp/ddegenaro/geowhisper_ckpts'
 
+def get_lengths(model: GeoWhisper, attn_mask: torch.Tensor):
+    
+    lengths = []
+    
+    for row in attn_mask:
+        if row[-1] == 1:
+            lengths.append(len(row))
+        else:
+            lengths.append(torch.where(row == model.tokenizer.pad_token_id)[0][0].item())
+        
+    return torch.tensor(lengths)
+
 def train(
     model: GeoWhisper,
     train_loader: torch.utils.data.DataLoader,
@@ -25,15 +37,14 @@ def train(
     num_buckets: int,
     num_mel_bins: int,
     overfit: bool,
-    log_interval: int = 100,
-    ckpt_interval: int = 10_000
+    log_interval: int = 100
 ):
 
     model.train()
     
     ignore_index = model.tokenizer.pad_token_id
     ce = CrossEntropyLoss(ignore_index=ignore_index)
-    # ctc = CTCLoss(blank=ignore_index)
+    ctc = CTCLoss(blank=ignore_index)
     total_loss = 0.0
     start = time()
     updates_count = 0
@@ -52,12 +63,25 @@ def train(
                 'attention_mask': tgt['attention_mask'][:, :-1]
             }
             output = model(src, tgt_inputs)
+            # print(output.shape[1].unsqueeze())
+            # print(tgt_inputs['attention_mask'])
+            # exit()
             
             # shift labels by 1
             ce_loss = ce(output.permute(0, 2, 1), tgt['input_ids'][:, 1:])
-            # ctc_loss = ctc(output.permute(1, 0, 2), tgt['input_ids'][:, 1:])
             
-            ce_loss.backward()
+            # input_lengths = (torch.ones(output.shape[0]) * output.shape[1]).int()
+            # target_lengths = get_lengths(model, tgt['attention_mask'][:, 1:])
+            # ctc_loss = ctc(
+            #     output.permute(1, 0, 2),
+            #     tgt['input_ids'][:, 1:],
+            #     input_lengths = input_lengths,
+            #     target_lengths = target_lengths
+            # )
+            
+            loss = ce_loss# + ctc_loss
+            
+            loss.backward()
             
             clip_grad_norm_(
                 model.parameters(),
@@ -65,25 +89,26 @@ def train(
             )
             
             optimizer.step()
-            
             scheduler.step()
             
             updates_count += 1
-            total_loss += ce_loss.item()
+            loss_val = loss.item()
+            total_loss += loss_val
             
             if updates_count % log_interval == 0:
                 total_time = time() - start
                 avg_loss = total_loss / updates_count
                 msg = f'Iteration {updates_count:06}/{max_updates}'
+                msg += f' - Loss: {loss_val:.4f}'
                 msg += f' - Avg. Loss: {avg_loss:.4f}'
                 msg += f' - Avg. Time: {total_time/updates_count:.4f}'
                 print(msg, flush=True)
-                # print('decoded:', model.greedy_decode(src, device), flush=True)
-                # print(' target:', model.tokenizer.decode(tgt['input_ids'][0].tolist(), skip_special_tokens=True), flush=True)
-                # print('predicted ids:', torch.argmax(output, dim=-1)[0], flush=True)
-                # print('   target ids:', tgt['input_ids'][0], flush=True)
+                # print('gr decode:', model.greedy_decode(src, device), flush=True)
+                # print('tf decode:', model.teacher_forced_decode(src, tgt), flush=True)
+                # print('   target:', model.tokenizer.decode(tgt['input_ids'][0].tolist(), skip_special_tokens=True), flush=True)
+                # print('predicted ids:', torch.argmax(output, dim=-1)[0].tolist()[:20], flush=True)
+                # print('   target ids:', tgt['input_ids'][:, 1:][0].tolist()[:20], flush=True)
                 print()
-                model.train()
                 
                 if not overfit and (updates_count + 1) % 10_000 == 0:
                     print('Saving model...')
@@ -94,7 +119,6 @@ def train(
                     )
                     print(f'Saved to {save_path}', flush=True)
                     print('Evaluating model...', flush=True)
-                    model.eval()
                     evaluate(
                         model,
                         'dev',
@@ -111,7 +135,7 @@ def train(
             if updates_count == max_updates:
                 break
         
-        if not overfit:   
+        if not overfit:
             print('Saving model...')
             save_path = os.path.join(CKPTS_DIR, f'model_{updates_count}.pt')
             torch.save(
@@ -147,16 +171,16 @@ def main():
     max_updates = 20_000 if overfit else 1_048_576
     audio_length = max_duration * 100 # 10ms frames
     
-    lr = 1e-3
+    lr = 1.5e-3
     betas = (0.9, 0.98)
     eps = 1e-6
     weight_decay = 0.1
     max_grad_norm = 1.0
     warmup_updates = 2048
 
-    d_model = 64 # 512
-    nhead = 4 # 8
-    num_layers = 2 # 6
+    d_model = 384 # 512
+    nhead = 6 # 8
+    num_layers = 4 # 6
     max_length = 128 # 1024
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -169,7 +193,7 @@ def main():
         max_length,
         audio_length,
         num_mel_bins,
-        AutoTokenizer.from_pretrained('FacebookAI/xlm-roberta-base')
+        AutoTokenizer.from_pretrained('openai/whisper-large-v3')
     )
     model.to(device)
     
@@ -201,8 +225,7 @@ def main():
         num_buckets,
         num_mel_bins,
         overfit,
-        log_interval = 20 if overfit else 100,
-        ckpt_interval = 100 if overfit else 50_000
+        log_interval = 20
     )
     
     if not overfit:
@@ -221,7 +244,7 @@ def main():
             num_buckets,
             num_mel_bins,
             device,
-            log_interval=1 if overfit else 100,
+            log_interval = 100,
             train_steps = 'last'
         )
     

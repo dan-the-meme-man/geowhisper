@@ -13,13 +13,14 @@ def get_optimizer(model, lr, betas, eps, weight_decay):
         weight_decay=weight_decay
     )
 
-def get_scheduler(optimizer, warmup_updates, max_updates):
-    def lr_lambda(current_update):
-        if current_update < warmup_updates:
-            return current_update / warmup_updates
-        else:
-            return max(0.0, 1 - (current_update - warmup_updates) / (max_updates - warmup_updates))
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+def get_scheduler(optimizer, warmup_steps, total_steps):
+    
+    def lr_lambda(step):
+        if step < warmup_steps:
+            return step / warmup_steps # linear warmup
+        return max(0.0, (total_steps - step) / (total_steps - warmup_steps)) # linear decay
+    
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 class GeoWhisper(nn.Module):
     
@@ -34,6 +35,9 @@ class GeoWhisper(nn.Module):
         tokenizer
     ):
         super(GeoWhisper, self).__init__()
+        self.tokenizer = tokenizer
+        self.tokenizer.pad_token = tokenizer.eos_token
+        self.max_length = max_length
         
         # convs and projection
         self.conv1 = nn.Conv1d(num_mel_bins, d_model, 3, 1, 1)
@@ -50,8 +54,8 @@ class GeoWhisper(nn.Module):
         )
         
         # text embedding and output projection, shared weights
-        self.input_embedding = nn.Embedding(tokenizer.vocab_size, d_model)
-        self.output_projection = nn.Linear(d_model, tokenizer.vocab_size)
+        self.input_embedding = nn.Embedding(len(self.tokenizer), d_model)
+        self.output_projection = nn.Linear(d_model, len(self.tokenizer))
         self.input_embedding.weight = self.output_projection.weight
         
         self.register_buffer(
@@ -67,10 +71,6 @@ class GeoWhisper(nn.Module):
         nn.init.xavier_normal_(self.learned_positional_encoding.weight, gain=1.0)
         nn.init.constant_(self.conv1.bias, 0.0)
         nn.init.constant_(self.conv2.bias, 0.0)
-        
-        self.tokenizer = tokenizer
-        self.tokenizer.pad_token = tokenizer.eos_token
-        self.max_length = max_length
         
     def _generate_sinusoidal_positional_encoding(self, max_length, d_model):
         encoding = torch.zeros(max_length, d_model)
@@ -158,26 +158,28 @@ class GeoWhisper(nn.Module):
         self.eval()
 
         tgt_input_ids = torch.tensor([[self.tokenizer.bos_token_id]]).to(device)
+        
+        with torch.no_grad():
 
-        for _ in range(self.max_length):
-            tgt = {
-                'input_ids': tgt_input_ids.to(device),
-                'attention_mask': torch.ones_like(tgt_input_ids).to(device)
-            }
+            for _ in range(self.max_length):
+                tgt = {
+                    'input_ids': tgt_input_ids.to(device),
+                    'attention_mask': torch.ones_like(tgt_input_ids).to(device)
+                }
 
-            # forward pass
-            with torch.no_grad():
-                logits = self(src, tgt)
-                # print(logits.shape)
+                # forward pass
+                with torch.no_grad():
+                    logits = self(src, tgt)
+                    # print(logits.shape)
 
-            next_token_id = torch.argmax(logits[:, -1, :], dim=-1)
-            tgt_input_ids = torch.cat(
-                [tgt_input_ids, next_token_id.unsqueeze(1)],
-                dim=1
-            )
+                next_token_id = torch.argmax(logits[:, -1, :], dim=-1)
+                tgt_input_ids = torch.cat(
+                    [tgt_input_ids, next_token_id.unsqueeze(1)],
+                    dim=1
+                )
 
-            if next_token_id.item() == self.tokenizer.eos_token_id:
-                break
+                if next_token_id.item() == self.tokenizer.eos_token_id:
+                    break
         
         #print(logits[0, :16, :5])
         
@@ -185,20 +187,39 @@ class GeoWhisper(nn.Module):
             tgt_input_ids[0].tolist(),
             skip_special_tokens=True
         )
+        
+        self.train()
 
         return output_text
     
     def batched_greedy_decode(self, src, device, max_length):
+        
+        self.eval()
+        
         batch_size = src.shape[0]
         tgt = torch.fill(self.tokenizer.bos_token_id, (batch_size, 1)).to(device)
-        for _ in range(max_length):
-            output = self(src, {'input_ids': tgt})
-            tgt = torch.cat((tgt, output.argmax(dim=-1)[:, -1].unsqueeze(1)), dim=1)
+        
+        with torch.no_grad():
+            for _ in range(max_length):
+                output = self(src, {'input_ids': tgt})
+                tgt = torch.cat((tgt, output.argmax(dim=-1)[:, -1].unsqueeze(1)), dim=1)
+            
+        self.train()
+        
         return tgt[:, 1:]
     
     def teacher_forced_decode(self, src, tgt):
-        output = self(src, tgt)
-        return self.tokenizer.batch_decode(output.argmax(dim=-1))
+        
+        self.eval()
+        
+        output = None
+        
+        with torch.no_grad():
+            output = self(src, tgt)
+        
+        self.train()
+        
+        return self.tokenizer.batch_decode(output.argmax(dim=-1))[0]
 
 if __name__ == "__main__":
     model = GeoWhisper(512, 8, 6, 1024, 2048)

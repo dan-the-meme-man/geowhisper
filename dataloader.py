@@ -68,7 +68,7 @@ def get_dataloader(
     manifest = CutSet.from_manifests(recordings, supervisions)
     
     if overfit:
-        manifest = manifest.subset(first=100)
+        manifest = manifest.subset(first=50)
     
     sampler = DynamicBucketingSampler(
         manifest.filter(lambda c: c.duration <= 30).pad(duration=max_duration),
