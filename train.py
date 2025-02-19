@@ -1,5 +1,7 @@
 import os
 from time import time
+import warnings
+warnings.filterwarnings('ignore')
 
 import torch
 from torch.nn import CrossEntropyLoss, CTCLoss
@@ -52,17 +54,25 @@ def train(
     while updates_count < max_updates:
         for batch in train_loader:
             
+            # breakpoint()
+            
             src = batch['inputs'].to(device)
             tgt = model.get_targets(batch['supervisions']).to(device)
             
             optimizer.zero_grad()
+            
+            cuts = batch['supervisions']['cut']
+            
+            src_attn_mask = torch.tensor([
+                cuts[i].supervisions_audio_mask() for i in range(len(cuts))
+            ]).bool().to(device)[:, ::320] # downsampled correctly???
             
             # shift teacher forcing by 1
             tgt_inputs = {
                 'input_ids': tgt['input_ids'][:, :-1],
                 'attention_mask': tgt['attention_mask'][:, :-1]
             }
-            output = model(src, tgt_inputs)
+            output = model(src, tgt_inputs, src_attn_mask=src_attn_mask)
             # print(output.shape[1].unsqueeze())
             # print(tgt_inputs['attention_mask'])
             # exit()
@@ -79,7 +89,8 @@ def train(
             #     target_lengths = target_lengths
             # )
             
-            loss = ce_loss# + ctc_loss
+            # loss = 0.5*ce_loss + 0.5*ctc_loss
+            loss = ce_loss
             
             loss.backward()
             
@@ -103,9 +114,9 @@ def train(
                 msg += f' - Avg. Loss: {avg_loss:.4f}'
                 msg += f' - Avg. Time: {total_time/updates_count:.4f}'
                 print(msg, flush=True)
-                # print('gr decode:', model.greedy_decode(src, device), flush=True)
-                # print('tf decode:', model.teacher_forced_decode(src, tgt), flush=True)
-                # print('   target:', model.tokenizer.decode(tgt['input_ids'][0].tolist(), skip_special_tokens=True), flush=True)
+                print('gr decode:', model.greedy_decode(src, device), flush=True)
+                print('tf decode:', model.teacher_forced_decode(src, tgt), flush=True)
+                print('   target:', model.tokenizer.decode(tgt['input_ids'][0].tolist(), skip_special_tokens=True), flush=True)
                 # print('predicted ids:', torch.argmax(output, dim=-1)[0].tolist()[:20], flush=True)
                 # print('   target ids:', tgt['input_ids'][:, 1:][0].tolist()[:20], flush=True)
                 print()
@@ -165,8 +176,8 @@ def main():
     overfit = False
     print(f'Overfitting: {overfit}', flush=True)
     
-    max_duration = 30 # probably way too big, just see what fits
-    num_buckets = 50
+    max_duration = 15 # probably way too big, just see what fits
+    num_buckets = 30 # 50
     num_mel_bins = 80
     max_updates = 20_000 if overfit else 1_048_576
     audio_length = max_duration * 100 # 10ms frames
@@ -176,7 +187,9 @@ def main():
     eps = 1e-6
     weight_decay = 0.1
     max_grad_norm = 1.0
-    warmup_updates = 2048
+    warmup_updates = 2048 # 2048
+    print(f'Learning rate: {lr}', flush=True)
+    print(f'Warmup updates: {warmup_updates}', flush=True)
 
     d_model = 384 # 512
     nhead = 6 # 8
@@ -210,7 +223,13 @@ def main():
         max_updates
     )
     
-    train_loader = get_dataloader(max_duration, num_buckets, num_mel_bins, overfit)
+    train_loader = get_dataloader(
+        max_duration,
+        num_buckets,
+        num_mel_bins,
+        overfit,
+        lang = 'en_us' if overfit else 'all'
+    )
     
     train(
         model,

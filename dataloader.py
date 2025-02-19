@@ -69,9 +69,15 @@ def get_dataloader(
     
     if overfit:
         manifest = manifest.subset(first=50)
+        
+    # trim silences
+    manifest = manifest.trim_to_supervisions()
+    # stats = manifest.compute_global_feature_stats()
+    # means = stats['norm_means']
+    # stds = stats['norm_stds']
     
     sampler = DynamicBucketingSampler(
-        manifest.filter(lambda c: c.duration <= 30).pad(duration=max_duration),
+        manifest.filter(lambda c: c.duration <= max_duration).pad(duration=max_duration),
         max_duration=max_duration, # per GPU, in seconds
         shuffle=True,
         num_buckets=num_buckets, # make small if small data - can cause errors
