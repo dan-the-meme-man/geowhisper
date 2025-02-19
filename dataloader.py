@@ -68,7 +68,7 @@ def get_dataloader(
     manifest = CutSet.from_manifests(recordings, supervisions)
     
     if overfit:
-        manifest = manifest.subset(first=50)
+        manifest = manifest.subset(first=500)
         
     # trim silences
     manifest = manifest.trim_to_supervisions()

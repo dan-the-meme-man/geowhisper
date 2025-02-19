@@ -48,6 +48,7 @@ def train(
     ce = CrossEntropyLoss(ignore_index=ignore_index)
     ctc = CTCLoss(blank=ignore_index)
     total_loss = 0.0
+    between_log_running_loss = 0.0
     start = time()
     updates_count = 0
     
@@ -105,21 +106,25 @@ def train(
             updates_count += 1
             loss_val = loss.item()
             total_loss += loss_val
+            between_log_running_loss += loss_val
             
             if updates_count % log_interval == 0:
                 total_time = time() - start
                 avg_loss = total_loss / updates_count
                 msg = f'Iteration {updates_count:06}/{max_updates}'
                 msg += f' - Loss: {loss_val:.4f}'
+                mean_loss = between_log_running_loss / log_interval
+                msg += f' - Running Avg. Loss: {mean_loss:.4f}'
                 msg += f' - Avg. Loss: {avg_loss:.4f}'
                 msg += f' - Avg. Time: {total_time/updates_count:.4f}'
                 print(msg, flush=True)
-                print('gr decode:', model.greedy_decode(src, device), flush=True)
+                # print('gr decode:', model.greedy_decode(src, device), flush=True)
                 print('tf decode:', model.teacher_forced_decode(src, tgt), flush=True)
                 print('   target:', model.tokenizer.decode(tgt['input_ids'][0].tolist(), skip_special_tokens=True), flush=True)
                 # print('predicted ids:', torch.argmax(output, dim=-1)[0].tolist()[:20], flush=True)
                 # print('   target ids:', tgt['input_ids'][:, 1:][0].tolist()[:20], flush=True)
                 print()
+                between_log_running_loss = 0.0
                 
                 if not overfit and (updates_count + 1) % 10_000 == 0:
                     print('Saving model...')
@@ -182,7 +187,7 @@ def main():
     max_updates = 20_000 if overfit else 1_048_576
     audio_length = max_duration * 100 # 10ms frames
     
-    lr = 1.5e-3
+    lr = 1.5e-4
     betas = (0.9, 0.98)
     eps = 1e-6
     weight_decay = 0.1
