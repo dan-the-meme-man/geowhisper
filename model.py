@@ -121,6 +121,22 @@ class GeoWhisper(nn.Module):
         
         # output projection layer
         self.output_projection = nn.Linear(d_model, len(self.tokenizer))
+        
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_normal_(m.weight)  # Gaussian fan-in for linear layers
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)  # Initialize biases to zero
+            elif isinstance(m, nn.Conv1d):
+                nn.init.xavier_normal_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.Embedding):  # If learned positional encoding uses an embedding
+                nn.init.xavier_normal_(m.weight)
+        
+        # init LPE with small normal noise
+        nn.init.normal_(self.lpe.positional_encoding, mean=0, std=0.02)
 
     def forward(self, src, tgt, src_attn_mask=None):
         
@@ -158,9 +174,10 @@ class GeoWhisper(nn.Module):
         # print(tgt_key_padding_mask)
         
         # causal mask
+        breakpoint()
         causal_mask = self.transformer.generate_square_subsequent_mask(
             tgt_embedded.shape[1]
-        ).to(src.device)
+        ).unsqueeze(0).expand(tgt_embedded.shape[0], -1, -1).to(src.device)
         # print('causal mask', causal_mask.shape) # text length, text length
         
         # transformer
