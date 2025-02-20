@@ -174,7 +174,6 @@ class GeoWhisper(nn.Module):
         # print(tgt_key_padding_mask)
         
         # causal mask
-        breakpoint()
         causal_mask = self.transformer.generate_square_subsequent_mask(
             tgt_embedded.shape[1]
         ).unsqueeze(0).expand(tgt_embedded.shape[0], -1, -1).to(src.device)
