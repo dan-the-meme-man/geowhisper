@@ -176,7 +176,7 @@ class GeoWhisper(nn.Module):
         # causal mask
         causal_mask = self.transformer.generate_square_subsequent_mask(
             tgt_embedded.shape[1]
-        ).unsqueeze(0).expand(tgt_embedded.shape[0], -1, -1).to(src.device)
+        ).to(src.device)
         # print('causal mask', causal_mask.shape) # text length, text length
         
         # transformer
