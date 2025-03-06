@@ -39,7 +39,8 @@ def train(
     num_buckets: int,
     num_mel_bins: int,
     overfit: bool,
-    log_interval: int = 100
+    log_interval: int = 100,
+    do_eval: bool = False
 ):
 
     model.train()
@@ -134,19 +135,20 @@ def train(
                         save_path
                     )
                     print(f'Saved to {save_path}', flush=True)
-                    print('Evaluating model...', flush=True)
-                    evaluate(
-                        model,
-                        'dev',
-                        langs,
-                        max_duration,
-                        num_buckets,
-                        num_mel_bins,
-                        device,
-                        log_interval,
-                        train_steps = str(updates_count)
-                    )
-                    model.train()
+                    if do_eval:
+                        print('Evaluating model...', flush=True)
+                        evaluate(
+                            model,
+                            'dev',
+                            langs,
+                            max_duration,
+                            num_buckets,
+                            num_mel_bins,
+                            device,
+                            log_interval,
+                            train_steps = str(updates_count)
+                        )
+                        model.train()
 
             if updates_count == max_updates:
                 break
@@ -159,18 +161,20 @@ def train(
                 save_path
             )
             print(f'Saved to {save_path}', flush=True)
-            print('Evaluating model...', flush=True)
-            evaluate(
-                model,
-                'dev',
-                langs,
-                max_duration,
-                num_buckets,
-                num_mel_bins,
-                device,
-                log_interval,
-                train_steps = updates_count
-            )
+            if do_eval:
+                print('Evaluating model...', flush=True)
+                evaluate(
+                    model,
+                    'dev',
+                    langs,
+                    max_duration,
+                    num_buckets,
+                    num_mel_bins,
+                    device,
+                    log_interval,
+                    train_steps = updates_count
+                )
+                model.train()
             
 def main():
     
